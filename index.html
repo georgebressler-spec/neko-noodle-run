@@ -192,10 +192,10 @@ function drawCat(){
   // squash on landing, stretch while rising
   const sq=landT>0?landT/0.14*0.22:(y>2&&vy>0?-0.1:0);
   g.scale(1+sq,1-sq);
-  g.shadowColor='#ffd9a0';g.shadowBlur=8;   // warm rim light so the cat reads on a dark street
-  g.fillStyle='#ff9f43';
+  g.shadowColor='#fff3c4';g.shadowBlur=16;   // bright rim light so the cat reads on a dark street
+  g.fillStyle='#ffc47a';
   // tail
-  g.strokeStyle='#ff9f43';g.lineWidth=5;g.lineCap='round';
+  g.strokeStyle='#ffc47a';g.lineWidth=5;g.lineCap='round';
   g.beginPath();g.moveTo(-18,-16);g.quadraticCurveTo(-34,-30+run*4,-30,-44+run*3);g.stroke();
   // body + head
   g.beginPath();g.ellipse(0,-16,20,sneak?10:12,0,0,7);g.fill();
