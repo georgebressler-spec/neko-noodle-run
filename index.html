@@ -20,8 +20,12 @@
 const W=800,H=400,GY=330,CX=140;
 const cv=document.getElementById('c'),g=cv.getContext('2d'),shareBtn=document.getElementById('share');
 function fit(){
-  const s=Math.min(innerWidth/W,innerHeight/H);cv.style.width=W*s+'px';cv.style.height=H*s+'px';
-  document.getElementById('hint').style.display=innerHeight>innerWidth?'block':'none';
+  // portrait phones: turn the game sideways so it fills the screen instead of a thin strip
+  const portrait=innerHeight>innerWidth;
+  const s=portrait?Math.min((innerHeight-8)/W,(innerWidth-8)/H):Math.min(innerWidth/W,innerHeight/H);
+  cv.style.width=W*s+'px';cv.style.height=H*s+'px';
+  cv.style.transform=portrait?'rotate(90deg)':'none';
+  document.getElementById('hint').style.display='none';
 }
 addEventListener('resize',fit);fit();
 
