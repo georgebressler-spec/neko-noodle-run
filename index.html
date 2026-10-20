@@ -189,9 +189,13 @@ function drawCat(){
   const cy=GY-y,run=Math.sin(t*(sneak?7:20));
   g.save();g.translate(CX,cy);
   if(sneak)g.translate(0,6);
+  // soft halo so the cat always separates from the dark street
+  const halo=g.createRadialGradient(8,-20,4,8,-20,62);
+  halo.addColorStop(0,'rgba(255,225,170,0.55)');halo.addColorStop(1,'rgba(255,225,170,0)');
+  g.fillStyle=halo;g.fillRect(-60,-90,140,140);
   // squash on landing, stretch while rising
   const sq=landT>0?landT/0.14*0.22:(y>2&&vy>0?-0.1:0);
-  g.scale(1+sq,1-sq);
+  g.scale((1+sq)*1.25,(1-sq)*1.25);
   g.shadowColor='#fff3c4';g.shadowBlur=16;   // bright rim light so the cat reads on a dark street
   g.fillStyle='#ffc47a';
   // tail
