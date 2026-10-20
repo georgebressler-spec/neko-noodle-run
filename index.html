@@ -65,18 +65,21 @@ function pop(txt,col){pops.push({txt,col,t:0})}
 function build(){
   rr=mulberry32(daySeed*31+night);
   L=3400+night*500;obs=[];zones=[];
-  let pos=800,sinceZone=0;
+  let pos=900,sinceZone=0,prevW=0;
   while(pos<L-700){
     if(sinceZone>1100&&night>=1&&rr()<0.55||(zones.length===0&&pos>1500)){
       // preceding obstacle so the player is tempted to jump right before the hush zone
+      pos+=prevW>60?200:100;          // keep the usual spacing after the last obstacle
       obs.push(mk(pos-260));
       zones.push({s:pos,e:pos+380,dog:pos+190});
-      pos+=380+210;sinceZone=0;
-      obs.push(mk(pos));            // obstacle right after the zone
-      pos+=rrnd(360,520);sinceZone+=400;
+      pos+=380+260;sinceZone=0;
+      const after=mk(pos);obs.push(after);   // obstacle right after the zone
+      pos+=rrnd(460,620)+(after.w>60?120:0);sinceZone+=400;prevW=after.w;
     }else{
-      obs.push(mk(pos));
-      const gap=rrnd(340,520)-Math.min(night*12,120);
+      const ob=mk(pos);obs.push(ob);
+      // wide obstacles (bike, cat pair) need a long flight, so leave extra room to land
+      const gap=rrnd(440,600)+(ob.w>60?160:0)-Math.min(night*10,80);
+      prevW=ob.w;
       pos+=gap;sinceZone+=gap;
     }
   }
@@ -84,10 +87,10 @@ function build(){
 }
 function mk(x){
   const r=rr();
-  if(r<0.4)return{x,w:34,h:36,k:'cat'};
-  if(r<0.65)return{x,w:30,h:42,k:'bin'};
-  if(r<0.85)return{x,w:70,h:36,k:'bike'};
-  return{x,w:100,h:36,k:'pair'};
+  if(r<0.45)return{x,w:34,h:36,k:'cat'};
+  if(r<0.75)return{x,w:30,h:42,k:'bin'};
+  if(r<0.92)return{x,w:64,h:36,k:'bike'};
+  return{x,w:82,h:36,k:'pair'};
 }
 function startNight(){
   build();d=0;y=0;vy=0;dogAwake=false;hits=0;msg='';shake=0;st='play';stateT=0;
@@ -116,7 +119,7 @@ function wake(){
 }
 function die(why){
   st='dead';stateT=0;shake=0.4;
-  burst(CX,GY-y-16,26,'#2e2a40',260,0.8,60);burst(CX,GY-y-16,8,'#ff7ab8',200,0.6,40);
+  burst(CX,GY-y-16,26,'#ff9f43',260,0.8,60);burst(CX,GY-y-16,8,'#ff7ab8',200,0.6,40);
   const pct=Math.min(99,Math.floor(d/L*100));
   best=Math.max(best,night-1);
   try{localStorage.setItem('nnr_best',best)}catch(e){}
@@ -189,10 +192,10 @@ function drawCat(){
   // squash on landing, stretch while rising
   const sq=landT>0?landT/0.14*0.22:(y>2&&vy>0?-0.1:0);
   g.scale(1+sq,1-sq);
-  g.shadowColor='#ff7ab8';g.shadowBlur=10;   // neon rim light so the cat reads on a dark street
-  g.fillStyle='#2e2a40';
+  g.shadowColor='#ffd9a0';g.shadowBlur=8;   // warm rim light so the cat reads on a dark street
+  g.fillStyle='#ff9f43';
   // tail
-  g.strokeStyle='#2e2a40';g.lineWidth=5;g.lineCap='round';
+  g.strokeStyle='#ff9f43';g.lineWidth=5;g.lineCap='round';
   g.beginPath();g.moveTo(-18,-16);g.quadraticCurveTo(-34,-30+run*4,-30,-44+run*3);g.stroke();
   // body + head
   g.beginPath();g.ellipse(0,-16,20,sneak?10:12,0,0,7);g.fill();
@@ -207,7 +210,7 @@ function drawCat(){
     g.beginPath();g.moveTo(-12+i*8,-8);g.lineTo(-12+i*8+ph*9,2);g.stroke();
   }
   // eyes
-  g.fillStyle='#ffe66d';g.fillRect(20,sneak?-20:-26,3,3);
+  g.fillStyle='#1c1a26';g.fillRect(20,sneak?-20:-26,3,3);
   g.restore();
 }
 
@@ -242,7 +245,7 @@ function drawObs(o){
   if(o.k==='cat'||o.k==='pair'){
     const n=o.k==='pair'?2:1;
     for(let i=0;i<n;i++){
-      g.save();g.translate(i*66,0);
+      g.save();g.translate(i*50,0);
       g.fillStyle=i?'#8a7a6a':'#b8b2a8';
       g.beginPath();g.ellipse(17,-14,17,15,0,0,7);g.fill();      // arched back
       g.beginPath();g.arc(4,-26,9,0,7);g.fill();
@@ -409,10 +412,10 @@ function overlay(){
 }
 function update(dt){
   const zone=inZone();
-  const base=Math.min(250+night*22,420);
+  const base=Math.min(215+night*15,360);
   d+=base*(zone?0.5:1)*dt;
   // jump physics (y>0 = airborne)
-  const gr=(held&&vy>0)?1250:2800;
+  const gr=(held&&vy>0)?1100:2200;   // floaty jumps: forgiving landings
   const wasAir=y>0.5;
   vy-=gr*dt;y+=vy*dt;
   if(y<=0){y=0;vy=0;if(wasAir){landT=0.14;burst(CX-4,GY-1,6,'rgba(200,190,230,0.6)',70,0.35,15);if(!zone)beep(120,0.05,'sine',0.04)}}
@@ -421,8 +424,8 @@ function update(dt){
   // landing/hop inside the zone = noise (e.g. airborne when entering)
   if(zone&&y>12&&d>zone.s+40&&!dogAwake){hits++;wake();return}
   for(const o of obs){
-    if(o.x<d+16&&o.x+o.w>d-14){
-      if(y<o.h-6){msg='Tripped over a stray!';die('stray');return}
+    if(o.x+4<d+14&&o.x+o.w-4>d-12){
+      if(y<o.h-8){msg='Tripped over a stray!';die('stray');return}
       o.clear=Math.min(o.clear===undefined?99:o.clear,y-o.h);
     }else if(!o.done&&o.x+o.w<=d-14){
       o.done=true;
