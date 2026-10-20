@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Neko Noodle Run</title>
+<style>
+  html,body{margin:0;height:100%;background:#07060f;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{display:block}
+  #hint{position:fixed;top:14%;left:0;right:0;text-align:center;display:none;font:600 14px system-ui,sans-serif;color:#6df0ff;pointer-events:none}
+  #share{position:fixed;left:50%;bottom:6%;transform:translateX(-50%);display:none;padding:10px 20px;font:600 16px system-ui,sans-serif;color:#ffd9a0;background:#2a1240;border:2px solid #ff7ab8;border-radius:999px;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="c" width="800" height="400"></canvas>
+<div id="hint">↻ Rotate your phone for a bigger view</div>
+<button id="share">Copy result</button>
+<script>
+const W=800,H=400,GY=330,CX=140;
+const cv=document.getElementById('c'),g=cv.getContext('2d'),shareBtn=document.getElementById('share');
+function fit(){
+  const s=Math.min(innerWidth/W,innerHeight/H);cv.style.width=W*s+'px';cv.style.height=H*s+'px';
+  document.getElementById('hint').style.display=innerHeight>innerWidth?'block':'none';
+}
+addEventListener('resize',fit);fit();
+
+// ---------- audio (tiny synth, starts on first input) ----------
+let ac=null;
+function beep(f,dur,type,vol,slide){
+  try{
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+    const o=ac.createOscillator(),v=ac.createGain();
+    o.type=type||'square';o.frequency.value=f;
+    if(slide)o.frequency.exponentialRampToValueAtTime(slide,ac.currentTime+dur);
+    v.gain.value=vol||0.05;v.gain.exponentialRampToValueAtTime(0.0001,ac.currentTime+dur);
+    o.connect(v);v.connect(ac.destination);o.start();o.stop(ac.currentTime+dur);
+  }catch(e){}
+}
+
+// ---------- state ----------
+let st='title',night=1,d=0,L=0,y=0,vy=0,held=false,t=0,shake=0,stateT=0;
+let obs=[],zones=[],dogAwake=false,hits=0,msg='',best=0,lastResult='';
+try{best=+localStorage.getItem('nnr_best')||0}catch(e){}
+
+function rnd(a,b){return a+Math.random()*(b-a)}
+// daily seed: everyone gets the same streets on the same date, so shared results are comparable
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const now0=new Date(),pad=n=>String(n).padStart(2,'0');
+const dateStr=`${now0.getFullYear()}-${pad(now0.getMonth()+1)}-${pad(now0.getDate())}`;
+const daySeed=+dateStr.replace(/-/g,'');
+let rr=Math.random;
+function rrnd(a,b){return a+rr()*(b-a)}
+let near=0,hb=0,landT=0;
+const parts=[],pops=[];
+function burst(x,y2,n,col,spd,life,up){
+  for(let i=0;i<n;i++){const a=rnd(0,6.283),s=rnd(0.3,1)*spd;
+    parts.push({x,y:y2,vx:Math.cos(a)*s,vy:Math.sin(a)*s-(up||0),life:rnd(0.5,1)*life,max:life,col,sz:rnd(2,4.5)})}
+}
+function pop(txt,col){pops.push({txt,col,t:0})}
+function build(){
+  rr=mulberry32(daySeed*31+night);
+  L=3400+night*500;obs=[];zones=[];
+  let pos=800,sinceZone=0;
+  while(pos<L-700){
+    if(sinceZone>1100&&night>=1&&rr()<0.55||(zones.length===0&&pos>1500)){
+      // preceding obstacle so the player is tempted to jump right before the hush zone
+      obs.push(mk(pos-260));
+      zones.push({s:pos,e:pos+380,dog:pos+190});
+      pos+=380+210;sinceZone=0;
+      obs.push(mk(pos));            // obstacle right after the zone
+      pos+=rrnd(360,520);sinceZone+=400;
+    }else{
+      obs.push(mk(pos));
+      const gap=rrnd(340,520)-Math.min(night*12,120);
+      pos+=gap;sinceZone+=gap;
+    }
+  }
+  obs.sort((a,b)=>a.x-b.x);
+}
+function mk(x){
+  const r=rr();
+  if(r<0.4)return{x,w:34,h:36,k:'cat'};
+  if(r<0.65)return{x,w:30,h:42,k:'bin'};
+  if(r<0.85)return{x,w:70,h:36,k:'bike'};
+  return{x,w:100,h:36,k:'pair'};
+}
+function startNight(){
+  build();d=0;y=0;vy=0;dogAwake=false;hits=0;msg='';shake=0;st='play';stateT=0;
+  shareBtn.style.display='none';shareBtn.textContent='Copy result';
+  near=0;hb=0;landT=0;parts.length=0;pops.length=0;
+}
+function inZone(){return zones.find(z=>d>=z.s-10&&d<=z.e)}
+
+// ---------- input ----------
+function press(){
+  if(!ac)beep(1,0.01,'sine',0.0001);
+  if(st==='title'){night=1;startNight();return}
+  if(st==='dead'){if(stateT>0.4){startNight()}return}
+  if(st==='win'){if(stateT>1.0){night++;startNight()}return}
+  held=true;
+  if(y<=0.01){
+    if(inZone()){wake();return}
+    vy=680;beep(520,0.12,'square',0.04,820);
+    burst(CX-6,GY-2,7,'rgba(200,190,230,0.7)',60,0.4,20);
+  }
+}
+function release(){held=false}
+function wake(){
+  dogAwake=true;msg='The dog woke up!';die('dog');
+  beep(180,0.35,'sawtooth',0.12,90);
+}
+function die(why){
+  st='dead';stateT=0;shake=0.4;
+  burst(CX,GY-y-16,26,'#2e2a40',260,0.8,60);burst(CX,GY-y-16,8,'#ff7ab8',200,0.6,40);
+  const pct=Math.min(99,Math.floor(d/L*100));
+  best=Math.max(best,night-1);
+  try{localStorage.setItem('nnr_best',best)}catch(e){}
+  lastResult=`Neko Noodle Run · Daily ${dateStr} · Night ${night}\n🐈💨 ${why==='dog'?'🐕 woke the dog':'tripped on a stray'} at ${pct}%\n${'🟩'.repeat(Math.floor(pct/10))}${'⬛'.repeat(10-Math.floor(pct/10))}${near?`\n😼 ${near} close call${near>1?'s':''}`:''}\nCan you reach the 🍜?`;
+  if(why!=='dog')beep(160,0.3,'sawtooth',0.1,70);
+  shareBtn.style.display='block';
+}
+function win(){
+  st='win';stateT=0;best=Math.max(best,night);
+  try{localStorage.setItem('nnr_best',best)}catch(e){}
+  for(const c of['#ff7ab8','#ffe66d','#6df0ff','#9dff6d','#ffb347'])burst(CX+120,GY-120,18,c,380,1.4,160);
+  lastResult=`Neko Noodle Run · Daily ${dateStr} · Night ${night}\n🐈🍜 Got the fish head soup!${hits?'':' (dog never stirred)'}\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩${near?`\n😼 ${near} close call${near>1?'s':''}`:''}\nCan you reach the 🍜?`;
+  shareBtn.style.display='block';
+  [660,880,1100].forEach((f,i)=>setTimeout(()=>beep(f,0.18,'triangle',0.07),i*120));
+}
+addEventListener('pointerdown',e=>{if(e.target===shareBtn)return;e.preventDefault();press()});
+addEventListener('pointerup',release);
+addEventListener('pointercancel',release);
+addEventListener('blur',release);
+addEventListener('contextmenu',e=>e.preventDefault());
+addEventListener('keydown',e=>{if(['Space','ArrowUp','KeyW'].includes(e.code)){e.preventDefault();if(!e.repeat)press()}});
+addEventListener('keyup',e=>{if(['Space','ArrowUp','KeyW'].includes(e.code))release()});
+shareBtn.addEventListener('click',e=>{
+  e.stopPropagation();
+  try{navigator.clipboard.writeText(lastResult);shareBtn.textContent='Copied!'}catch(err){shareBtn.textContent='Copy failed'}
+  setTimeout(()=>shareBtn.textContent='Copy result',1200);
+});
+shareBtn.addEventListener('pointerdown',e=>e.stopPropagation());
+
+// ---------- world art (generated once) ----------
+const signs=[['ラーメン','#ff4d6d'],['居酒屋','#ffb347'],['カラオケ','#6df0ff'],['寿司','#ff7ab8'],['24H','#9dff6d'],['猫','#ffe66d']];
+function layer(n,minH,maxH,minW,maxW,span){
+  const a=[];let x=0;
+  while(x<span){
+    const w=rnd(minW,maxW),h=rnd(minH,maxH),win=[];
+    for(let i=0;i<Math.floor(w/16);i++)for(let j=0;j<Math.floor(h/22);j++)if(Math.random()<0.28)win.push([i,j]);
+    const s=Math.random()<0.5?signs[Math.floor(Math.random()*signs.length)]:null;
+    a.push({x,w,h,win,s,sy:rnd(20,Math.max(30,h-50))});
+    x+=w+rnd(4,24);
+  }
+  return a;
+}
+const SPAN=1600,far=layer(0,120,240,50,90,SPAN),nearL=layer(0,80,190,70,130,SPAN);
+const rain=[...Array(70)].map(()=>({x:rnd(0,W),y:rnd(0,H),s:rnd(500,800)}));
+
+function drawLayer(arr,par,base,col,winCol,signs_){
+  const off=(d*par)%SPAN;
+  for(let rep=-1;rep<2;rep++){
+    for(const b of arr){
+      const x=b.x-off+rep*SPAN;
+      if(x>W||x+b.w<0)continue;
+      g.fillStyle=col;g.fillRect(x,base-b.h,b.w,b.h);
+      g.fillStyle=winCol;
+      for(const [i,j] of b.win)g.fillRect(x+6+i*16,base-b.h+8+j*22,8,12);
+      if(signs_&&b.s){
+        g.save();g.shadowColor=b.s[1];g.shadowBlur=14;g.fillStyle=b.s[1];
+        g.font='bold 16px sans-serif';g.textAlign='left';
+        g.fillText(b.s[0],x+6,base-b.h+b.sy);g.restore();
+      }
+    }
+  }
+}
+
+// ---------- drawing ----------
+function drawCat(){
+  const sneak=!!inZone()&&st==='play';
+  const cy=GY-y,run=Math.sin(t*(sneak?7:20));
+  g.save();g.translate(CX,cy);
+  if(sneak)g.translate(0,6);
+  // squash on landing, stretch while rising
+  const sq=landT>0?landT/0.14*0.22:(y>2&&vy>0?-0.1:0);
+  g.scale(1+sq,1-sq);
+  g.shadowColor='#ff7ab8';g.shadowBlur=10;   // neon rim light so the cat reads on a dark street
+  g.fillStyle='#2e2a40';
+  // tail
+  g.strokeStyle='#2e2a40';g.lineWidth=5;g.lineCap='round';
+  g.beginPath();g.moveTo(-18,-16);g.quadraticCurveTo(-34,-30+run*4,-30,-44+run*3);g.stroke();
+  // body + head
+  g.beginPath();g.ellipse(0,-16,20,sneak?10:12,0,0,7);g.fill();
+  g.beginPath();g.arc(18,sneak?-18:-24,10,0,7);g.fill();
+  g.beginPath();g.moveTo(11,sneak?-26:-32);g.lineTo(14,sneak?-36:-42);g.lineTo(19,sneak?-27:-33);g.fill();
+  g.beginPath();g.moveTo(20,sneak?-27:-33);g.lineTo(25,sneak?-36:-42);g.lineTo(27,sneak?-24:-30);g.fill();
+  // legs
+  g.lineWidth=4;
+  const air=y>2;
+  for(let i=0;i<4;i++){
+    const ph=air?(i<2?-0.9:0.9):Math.sin(t*(sneak?7:20)+i*1.6);
+    g.beginPath();g.moveTo(-12+i*8,-8);g.lineTo(-12+i*8+ph*9,2);g.stroke();
+  }
+  // eyes
+  g.fillStyle='#ffe66d';g.fillRect(20,sneak?-20:-26,3,3);
+  g.restore();
+}
+
+function drawDog(z){
+  const sx=z.dog-d+CX;
+  if(sx<-150||sx>W+150)return;
+  g.save();g.translate(sx,GY);
+  g.fillStyle='#7a4a2b';
+  if(!dogAwake){
+    g.beginPath();g.ellipse(0,-14,42,15,0,0,7);g.fill();
+    g.beginPath();g.arc(-38,-12,13,0,7);g.fill();
+    g.fillStyle='#4a2a16';g.beginPath();g.ellipse(-46,-20,5,9,0.5,0,7);g.fill();
+    g.strokeStyle='#1c1a26';g.lineWidth=2;g.beginPath();g.moveTo(-42,-12);g.lineTo(-36,-12);g.stroke();
+    g.fillStyle='#ffd9a0';g.font='bold 16px sans-serif';
+    const b=Math.sin(t*2);
+    g.fillText('z',-20,-40+b*3);g.font='bold 22px sans-serif';g.fillText('Z',-6,-58-b*3);
+  }else{
+    g.translate(-60,0);
+    g.beginPath();g.ellipse(0,-34,38,20,0,0,7);g.fill();
+    g.beginPath();g.arc(-38,-50,16,0,7);g.fill();
+    for(const lx of[-20,-4,14,28]){g.fillRect(lx,-26,8,26)}
+    g.fillStyle='#ff3b3b';g.fillRect(-46,-54,5,5);
+    g.fillStyle='#fff';g.font='bold 28px sans-serif';g.fillText('WOOF!',-40,-90);
+  }
+  g.restore();
+}
+
+function drawObs(o){
+  const x=o.x-d+CX;
+  if(x>W+120||x+o.w<-20)return;
+  g.save();g.translate(x,GY);
+  if(o.k==='cat'||o.k==='pair'){
+    const n=o.k==='pair'?2:1;
+    for(let i=0;i<n;i++){
+      g.save();g.translate(i*66,0);
+      g.fillStyle=i?'#8a7a6a':'#b8b2a8';
+      g.beginPath();g.ellipse(17,-14,17,15,0,0,7);g.fill();      // arched back
+      g.beginPath();g.arc(4,-26,9,0,7);g.fill();
+      g.beginPath();g.moveTo(-2,-32);g.lineTo(1,-42);g.lineTo(7,-33);g.fill();
+      g.beginPath();g.moveTo(8,-32);g.lineTo(13,-41);g.lineTo(14,-30);g.fill();
+      g.strokeStyle=g.fillStyle;g.lineWidth=4;g.beginPath();g.moveTo(32,-12);g.quadraticCurveTo(44,-26,38,-38);g.stroke();
+      g.fillStyle='#ff4d6d';g.fillRect(1,-28,3,3);
+      g.restore();
+    }
+  }else if(o.k==='bin'){
+    g.fillStyle='#3d6f6f';g.fillRect(0,-42,30,42);g.fillStyle='#2b4f4f';g.fillRect(-3,-46,36,6);
+    g.fillStyle='#8fd3d3';g.fillRect(6,-30,18,3);
+  }else{
+    g.strokeStyle='#9aa0b8';g.lineWidth=3;
+    g.beginPath();g.arc(14,-14,13,0,7);g.stroke();g.beginPath();g.arc(56,-14,13,0,7);g.stroke();
+    g.beginPath();g.moveTo(14,-14);g.lineTo(30,-34);g.lineTo(56,-14);g.moveTo(30,-34);g.lineTo(26,-14);g.lineTo(14,-14);g.stroke();
+  }
+  g.restore();
+}
+
+function drawShop(){
+  const sx=L-d+CX;
+  if(sx>W+300)return;
+  g.save();g.translate(sx,GY);
+  g.fillStyle='#2a1a1a';g.fillRect(0,-190,230,190);
+  // warm glow
+  const gr=g.createRadialGradient(100,-60,10,100,-60,260);
+  gr.addColorStop(0,'rgba(255,190,100,0.45)');gr.addColorStop(1,'rgba(255,190,100,0)');
+  g.fillStyle=gr;g.fillRect(-160,-300,560,330);
+  g.fillStyle='#ffcf87';g.fillRect(24,-120,120,92);          // lit window
+  g.fillStyle='#1c0f0f';g.beginPath();g.arc(84,-70,16,0,7);g.fill();g.fillRect(70,-70,28,42); // owner
+  g.fillStyle='#e8e8e8';g.fillRect(150,-120,60,92);
+  g.fillStyle='#c0392b';
+  for(let i=0;i<4;i++)g.fillRect(150+i*15,-120,12,60);        // noren
+  g.save();g.shadowColor='#ff4d6d';g.shadowBlur=20;g.fillStyle='#ff4d6d';
+  g.font='bold 30px sans-serif';g.fillText('ラーメン',44,-150);g.restore();
+  g.fillStyle='#d94141';g.beginPath();g.ellipse(-14,-90,14,22,0,0,7);g.fill(); // lantern
+  g.strokeStyle='rgba(255,255,255,0.5)';g.lineWidth=3;
+  for(let i=0;i<3;i++){g.beginPath();g.moveTo(60+i*14,-128);g.quadraticCurveTo(52+i*14,-150-Math.sin(t*3+i)*6,64+i*14,-175);g.stroke()}
+  g.restore();
+}
+
+function drawBg(){
+  const sky=g.createLinearGradient(0,0,0,GY);
+  sky.addColorStop(0,'#0a0720');sky.addColorStop(1,'#35144a');
+  g.fillStyle=sky;g.fillRect(0,0,W,H);
+  g.fillStyle='#fff3c4';g.beginPath();g.arc(640,70,22,0,7);g.fill();
+  g.fillStyle='rgba(255,243,196,0.08)';g.beginPath();g.arc(640,70,50,0,7);g.fill();
+  drawLayer(far,0.15,GY-40,'#150f2c','#6b5aa8',false);
+  drawLayer(nearL,0.45,GY,'#1d1238','#ffcf87',true);
+  // street
+  g.fillStyle='#14111d';g.fillRect(0,GY,W,H-GY);
+  g.fillStyle='#2a2440';g.fillRect(0,GY,W,3);
+  const off=d%120;
+  g.fillStyle='#2a2440';
+  for(let x=-off;x<W;x+=120)g.fillRect(x,GY+36,50,4);
+  // neon puddle reflections
+  g.fillStyle='rgba(255,122,184,0.12)';
+  for(let x=-((d*0.9)%400);x<W;x+=400)g.fillRect(x+60,GY+16,90,5);
+}
+
+function drawRain(dt){
+  g.strokeStyle='rgba(180,200,255,0.25)';g.lineWidth=1;g.beginPath();
+  for(const r of rain){
+    r.y+=r.s*dt;r.x-=r.s*dt*0.15;
+    if(r.y>H){r.y=-10;r.x=rnd(0,W+60)}
+    g.moveTo(r.x,r.y);g.lineTo(r.x-2,r.y+10);
+  }
+  g.stroke();
+}
+
+function drawFx(dt){
+  for(let i=parts.length-1;i>=0;i--){
+    const p=parts[i];p.life-=dt;
+    if(p.life<=0){parts.splice(i,1);continue}
+    p.vy+=500*dt;p.x+=p.vx*dt;p.y+=p.vy*dt;
+    g.globalAlpha=Math.min(1,p.life/p.max*1.6);g.fillStyle=p.col;g.fillRect(p.x,p.y,p.sz,p.sz);
+  }
+  g.globalAlpha=1;
+  for(let i=pops.length-1;i>=0;i--){
+    const p=pops[i];p.t+=dt;
+    if(p.t>0.9){pops.splice(i,1);continue}
+    g.globalAlpha=1-p.t/0.9;g.fillStyle=p.col;g.font='bold 18px system-ui,sans-serif';
+    g.fillText(p.txt,CX+30,GY-90-p.t*40);
+  }
+  g.globalAlpha=1;
+}
+function center(txt,y2,size,col){
+  g.fillStyle=col||'#fff';g.font=`bold ${size}px system-ui,sans-serif`;g.textAlign='center';
+  g.fillText(txt,W/2,y2);g.textAlign='left';
+}
+
+function drawHud(){
+  // progress bar
+  const bx=140,bw=520,by=26;
+  g.fillStyle='rgba(255,255,255,0.15)';g.fillRect(bx,by,bw,6);
+  g.fillStyle='#ff7ab8';g.fillRect(bx,by,bw*Math.min(1,d/L),6);
+  for(const z of zones){g.fillStyle='#ffd9a0';g.fillRect(bx+bw*z.s/L,by-3,bw*(z.e-z.s)/L,3)}
+  g.font='18px sans-serif';g.fillText('🐈',bx+bw*Math.min(1,d/L)-9,by+4);g.fillText('🍜',bx+bw,by+6);
+  g.fillStyle='#ffd9a0';g.font='bold 14px system-ui,sans-serif';
+  g.fillText('NIGHT '+night,20,30);
+  g.textAlign='right';g.fillText('BEST '+best,W-20,30);g.textAlign='left';
+  // dog warnings
+  const z=zones.find(z=>d<z.e&&z.s-d<520);
+  if(z&&st==='play'){
+    const inz=d>=z.s-10;
+    const a=0.6+0.4*Math.sin(t*8);
+    g.globalAlpha=a;
+    center(inz?'しーっ… keep paws on the ground':'🐕 Sleeping dog ahead — DON\'T JUMP',70,inz?20:18,inz?'#ffd9a0':'#ff9aa8');
+    g.globalAlpha=1;
+  }
+}
+
+// ---------- loop ----------
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(0.033,(now-last)/1000);last=now;t+=dt;stateT+=dt;
+  if(st==='play')update(dt);
+  if(shake>0)shake-=dt;
+  g.save();
+  if(shake>0)g.translate(rnd(-6,6),rnd(-6,6));
+  drawBg();drawShop();
+  for(const z of zones)drawDog(z);
+  for(const o of obs)drawObs(o);
+  if(st!=='title')drawCat();
+  else{ // title cat idles
+    d=t*120;drawCat();
+  }
+  drawRain(dt);
+  drawFx(dt);
+  g.restore();
+  if(st==='play'&&inZone()){ // heartbeat vignette inside the hush zone
+    const p=0.12+0.1*Math.max(0,Math.sin(t*9));
+    const v=g.createRadialGradient(W/2,H/2,H*0.3,W/2,H/2,W*0.65);
+    v.addColorStop(0,'rgba(255,60,90,0)');v.addColorStop(1,`rgba(255,60,90,${p*2})`);
+    g.fillStyle=v;g.fillRect(0,0,W,H);
+  }
+  if(st!=='title')drawHud();
+  overlay();
+  requestAnimationFrame(frame);
+}
+function overlay(){
+  if(st==='title'){
+    g.fillStyle='rgba(5,3,15,0.55)';g.fillRect(0,0,W,H);
+    g.save();g.shadowColor='#ff7ab8';g.shadowBlur=24;
+    center('NEKO NOODLE RUN',150,52,'#ffd9a0');g.restore();
+    center('ネコ ヌードル ラン',186,20,'#ff7ab8');
+    center('DAILY STREETS · '+dateStr+' · same for everyone',212,14,'#6df0ff');
+    center('A hungry cat. A rainy Tokyo night. Warm fish head soup at the end.',240,16,'#fff');
+    center('TAP / SPACE to jump (hold = higher)',270,16,'#fff');
+    center('But never jump near the sleeping dog. 🐕💤',296,16,'#ff9aa8');
+    if(Math.sin(t*5)>0)center('— tap to start —',350,18,'#ffd9a0');
+  }else if(st==='dead'){
+    g.fillStyle='rgba(5,3,15,0.6)';g.fillRect(0,0,W,H);
+    center(msg||'Tripped over a stray!',170,40,'#ff9aa8');
+    center(dogAwake?'Shhh… Stay on the ground inside the dotted zone.':'Tap shorter hops, hold for tall obstacles.',208,16,'#fff');
+    center('Night '+night+'  ·  tap to retry',250,20,'#ffd9a0');
+  }else if(st==='win'){
+    g.fillStyle='rgba(30,12,0,0.55)';g.fillRect(0,0,W,H);
+    center('🍜 Fish head soup! 🐈',170,40,'#ffd9a0');
+    center('The owner smiles. Night '+night+' complete.',208,18,'#fff');
+    center('tap for the next night',250,20,'#ff7ab8');
+  }
+}
+function update(dt){
+  const zone=inZone();
+  const base=Math.min(250+night*22,420);
+  d+=base*(zone?0.5:1)*dt;
+  // jump physics (y>0 = airborne)
+  const gr=(held&&vy>0)?1250:2800;
+  const wasAir=y>0.5;
+  vy-=gr*dt;y+=vy*dt;
+  if(y<=0){y=0;vy=0;if(wasAir){landT=0.14;burst(CX-4,GY-1,6,'rgba(200,190,230,0.6)',70,0.35,15);if(!zone)beep(120,0.05,'sine',0.04)}}
+  if(landT>0)landT-=dt;
+  if(zone){hb-=dt;if(hb<=0){hb=0.7;beep(65,0.14,'sine',0.07)}}
+  // landing/hop inside the zone = noise (e.g. airborne when entering)
+  if(zone&&y>12&&d>zone.s+40&&!dogAwake){hits++;wake();return}
+  for(const o of obs){
+    if(o.x<d+16&&o.x+o.w>d-14){
+      if(y<o.h-6){msg='Tripped over a stray!';die('stray');return}
+      o.clear=Math.min(o.clear===undefined?99:o.clear,y-o.h);
+    }else if(!o.done&&o.x+o.w<=d-14){
+      o.done=true;
+      if(o.clear!==undefined&&o.clear<16){near++;pop('close call!','#ffe66d');burst(CX+10,GY-o.h,10,'#ffe66d',160,0.5,40);beep(880+near*40,0.1,'triangle',0.06)}
+    }
+  }
+  if(d>=L){win()}
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
